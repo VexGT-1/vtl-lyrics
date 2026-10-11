@@ -2,7 +2,7 @@
 // On every Spotify start it downloads the NEWEST Liquid Lyrics from NMWplays/Liquid-Lyrics, adds VTL as
 // the first lyrics source (word-timed, from api.vexqyq.com/lyrics/<trackId>), and runs it. Tracks VTL has
 // nothing for fall through to Spicy Lyrics and Spotify as usual. Nothing is written to disk.
-// Do not also install Liquid Lyrics on its own, two copies would fight.
+// If Liquid Lyrics is already installed on its own this does nothing except show a notice (once a day).
 // If a Liquid Lyrics update ever moves the code this patches, it still runs plain Liquid Lyrics and
 // shows a notice. Offline: the last downloaded copy is reused.
 (async function VTLLiquid() {
@@ -10,6 +10,30 @@
   window.__vtlLiquid = true;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   while (!(window.Spicetify && Spicetify.Player && Spicetify.showNotification)) await sleep(300);
+
+  // Is Liquid Lyrics already installed on its own (file extension or Marketplace)? Then loading a second
+  // copy would fight with it, so leave it alone and say so. A copy loads at top level and sets
+  // window.__liquidLyricsClock; a Marketplace install also leaves a marketplace:installed:* key.
+  const installedSeparately = () => {
+    if (typeof window.__liquidLyricsClock === "function") return true;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = (localStorage.key(i) || "").toLowerCase();
+        if (k.startsWith("marketplace:installed:") && k.includes("liquid-lyrics") && !k.includes("vtl")) return true;
+      }
+    } catch (e) {}
+    return false;
+  };
+  for (let i = 0; i < 10 && !installedSeparately(); i++) await sleep(300); // give a file-installed copy time to start
+  if (installedSeparately()) {
+    let last = 0;
+    try { last = Number(localStorage.getItem("vtl-ll-warned")) || 0; } catch (e) {}
+    if (Date.now() - last > 864e5) {
+      Spicetify.showNotification("VTL Lyrics: Liquid Lyrics is installed separately, so the VTL source is not added. Remove Liquid Lyrics and keep only VTL Lyrics.", true);
+      try { localStorage.setItem("vtl-ll-warned", String(Date.now())); } catch (e) {}
+    }
+    return;
+  }
 
   const RAW = "https://raw.githubusercontent.com/NMWplays/Liquid-Lyrics/main/liquid-lyrics.js";
   const CACHE = "vtl-liquid-lyrics-src";
