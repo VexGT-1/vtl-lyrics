@@ -41,6 +41,10 @@ VTL's source asks the real BiniLyrics source to do the TTML parsing, with a mark
 
 A build that is not in the table still works if `vtlauto` loads before the list is built (the usual case). To add a build: find the function that stores a 6-element `arrayWithObjects:count:` result to a static (it builds the `binilyrics` provider) and read the address in its `str x0, [x8, #off]`.
 
-## Desktop (Spicetify)
+## Desktop (Spicetify Marketplace)
+
+Install **VTL Lyrics** from the Spicetify Marketplace (Extensions tab). On every Spotify start it downloads the newest [Liquid Lyrics](https://github.com/NMWplays/Liquid-Lyrics), adds VTL as its first source and runs it. Nothing is written to disk. Do not also install Liquid Lyrics on its own. If a Liquid Lyrics update breaks the patch, plain Liquid Lyrics still runs and a notice shows.
+
+## Desktop (Spicetify, manual)
 
 See `spicetify/TUTORIAL.md`. Not tested against a live desktop client yet.
