@@ -13,7 +13,7 @@
 // built-in "Show Devtools" option in its right-click menu - and inspect
 // the Lyrics tab to find the current container's selector).
 (function VTLLyrics() {
-  if (!Spicetify || !Spicetify.Player || !Spicetify.Player.data) {
+  if (typeof Spicetify === "undefined" || !Spicetify.Player || !Spicetify.Player.data || !Spicetify.showNotification) {
     setTimeout(VTLLyrics, 300);
     return;
   }
@@ -31,6 +31,8 @@
   let hasVtlLyrics = false;
   let pollId = null;
   let injectedRoot = null; // the VTL container currently standing in for Spotify's own
+  let overlay = null;      // our own floating panel, used when Spotify's Lyrics tab can't be found
+  let overlayOpen = false;
 
   const style = document.createElement("style");
   style.textContent = `
@@ -72,6 +74,21 @@
 
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Floating panel on the right. Works no matter what Spotify names its own Lyrics tab,
+  // opened/closed with the "VTL" button in the top bar (or Ctrl+Shift+L).
+  function toggleOverlay() {
+    overlayOpen = !overlayOpen;
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "vtl-lyrics-overlay";
+      overlay.style.cssText = "position:fixed;top:64px;right:12px;bottom:100px;width:380px;z-index:99999;" +
+        "background:rgba(10,10,12,.96);border:1px solid rgba(200,255,47,.35);border-radius:12px;overflow:hidden;display:none;";
+      document.body.appendChild(overlay);
+    }
+    overlay.style.display = overlayOpen ? "block" : "none";
+    if (overlayOpen) injectInto(overlay); else injectedRoot = null;
   }
 
   function findLyricsContainer() {
@@ -154,9 +171,9 @@
   }
 
   function applyToPanel() {
-    const container = findLyricsContainer();
+    const container = findLyricsContainer() || (overlayOpen ? overlay : null);
     if (!container) return; // Lyrics tab isn't open right now
-    if (hasVtlLyrics) injectInto(container);
+    if (hasVtlLyrics) { if (!injectedRoot || !injectedRoot.isConnected) injectInto(container); else render(); }
     else restoreNative(container);
   }
 
@@ -173,11 +190,16 @@
   // The Lyrics tab mounts/unmounts its container as the user switches tabs,
   // so re-apply whenever the DOM changes rather than only on song change.
   const observer = new MutationObserver(() => {
-    if (hasVtlLyrics && !injectedRoot) applyToPanel();
+    if (hasVtlLyrics && (!injectedRoot || !injectedRoot.isConnected)) { injectedRoot = null; applyToPanel(); }
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
   Spicetify.Player.addEventListener("songchange", onSongChange);
+  try {
+    if (Spicetify.Topbar && Spicetify.Topbar.Button) new Spicetify.Topbar.Button("VTL Lyrics", "lyrics", toggleOverlay);
+  } catch (e) {}
+  document.addEventListener("keydown", (e) => { if (e.ctrlKey && e.shiftKey && e.code === "KeyL") toggleOverlay(); });
+  Spicetify.showNotification("VTL Lyrics loaded. Click VTL in the top bar or press Ctrl+Shift+L.");
   onSongChange();
 
   if (pollId) clearInterval(pollId);
