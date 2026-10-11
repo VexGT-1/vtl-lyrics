@@ -4,7 +4,17 @@
     "description": "Installs the newest Liquid Lyrics and adds VTL as its first lyrics source: word-timed lyrics from api.vexqyq.com, background vocals shown small. Tracks VTL has nothing for fall back to Spicy Lyrics and Spotify. Do not install Liquid Lyrics separately.",
     "main": "spicetify/vtl-liquid.js",
     "readme": "README.md",
-    "authors": [{ "name": "Vex", "url": "https://github.com/VexGT-1" }],
-    "tags": ["lyrics", "word-synced", "karaoke"]
+    "authors": [
+      {
+        "name": "Vex",
+        "url": "https://github.com/VexGT-1"
+      }
+    ],
+    "tags": [
+      "lyrics",
+      "word-synced",
+      "karaoke"
+    ],
+    "preview": "preview.png"
   }
 ]
