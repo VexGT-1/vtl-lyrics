@@ -20,11 +20,14 @@ if len(sys.argv) > 1:
     src = open(sys.argv[1], encoding="utf-8").read()
 elif os.path.exists(dest) and "VTLfetch" not in open(dest, encoding="utf-8").read():
     src = open(dest, encoding="utf-8").read()          # already installed (Marketplace), patch in place
+elif os.path.exists(dest):
+    print("already patched, re-patching from a fresh download")
+    src = urllib.request.urlopen(urllib.request.Request(RAW, headers={"User-Agent": "vtl-installer"})).read().decode("utf-8")
 else:
     req = urllib.request.Request(RAW, headers={"User-Agent": "vtl-installer"})
     src = urllib.request.urlopen(req).read().decode("utf-8")
 
-if "VTLfetch" in src:
+if "VTLfetch" in src and len(sys.argv) > 1:
     print("already patched")
 else:
     prov = open(os.path.join(here, "vtl-provider.js"), encoding="utf-8").read().strip() + "\n"
