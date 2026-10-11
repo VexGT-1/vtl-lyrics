@@ -1,0 +1,39 @@
+name: Build iOS dylib
+
+on:
+  workflow_dispatch: {}
+  push:
+    paths: ["ios/**", ".github/workflows/build-ios.yml"]
+
+env:
+  THEOS: ${{ github.workspace }}/theos
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/checkout@v5
+        with:
+          repository: theos/theos
+          path: theos
+          submodules: recursive
+
+      - name: Install tools
+        run: brew install make ldid dpkg
+
+      - name: Build
+        run: env -u MAKELEVEL gmake -C ios clean package FINALPACKAGE=1
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: vtlauto-build
+          path: |
+            ios/packages/*.deb
+            ios/.theos/obj/**/vtlauto.dylib
+          if-no-files-found: error

@@ -1,0 +1,5 @@
+.theos/
+packages/
+__pycache__/
+*.ipa
+*.dylib

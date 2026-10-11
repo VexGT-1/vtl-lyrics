@@ -1,0 +1,9 @@
+Package: com.vexqyq.vtlauto
+Name: VTLAuto
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: VTL lyrics as their own source in the modded Spotify (chroma.pw mod)
+Maintainer: vexqyq
+Author: vexqyq
+Section: Tweaks
+Depends: mobilesubstrate
