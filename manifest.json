@@ -1,0 +1,10 @@
+[
+  {
+    "name": "VTL Lyrics",
+    "description": "Word-timed lyrics from VTL (api.vexqyq.com) in a floating panel. Top-bar button or Ctrl+Shift+L. Tracks VTL has nothing for are left alone.",
+    "main": "spicetify/vtl-lyrics.js",
+    "readme": "README.md",
+    "authors": [{ "name": "Vex", "url": "https://github.com/VexGT-1" }],
+    "tags": ["lyrics", "word-synced", "karaoke"]
+  }
+]
