@@ -37,7 +37,7 @@
   const style = document.createElement("style");
   style.textContent = `
     #vtl-lyrics-root { padding: 24px; overflow-y: auto; height: 100%; }
-    .vtl-line { color: rgba(255,255,255,.4); font-size: 22px; font-weight: 700; line-height: 1.5;
+    .vtl-line { color: rgba(255,255,255,.4); font-size: 16px; font-weight: 700; line-height: 1.5;
       margin-bottom: 14px; transition: color .25s, transform .25s; transform-origin: left center; }
     .vtl-line.vtl-active { color: #fff; transform: scale(1.03); }
     .vtl-word { transition: color .15s; }
