@@ -60,6 +60,14 @@ static BOOL gInjected;
 
 static void showBadge(int attemptsLeft, NSString *text);
 
+// Diagnostic: reports each load step to the worker so a failed install can be read off its logs
+// (the URL is all that matters, the answer is ignored).
+static void vtlPing(NSString *stage) {
+    NSURLComponents *c = [NSURLComponents componentsWithString:@"https://api.vexqyq.com/vtlauto/ping"];
+    c.queryItems = @[[NSURLQueryItem queryItemWithName:@"s" value:stage]];
+    if (c.URL) [[NSURLSession.sharedSession dataTaskWithURL:c.URL] resume];
+}
+
 #pragma mark - the NSURLProtocol that answers BiniLyrics' search for VTL tracks
 
 static NSString *queryParam(NSURL *url, NSString *name) {
@@ -218,6 +226,7 @@ static BOOL withVTL(const id __unsafe_unretained *objects, NSUInteger cnt, id __
         id __unsafe_unretained buf[25];
         if (withVTL(objects, cnt, buf)) {
             gInjected = YES;
+            vtlPing([NSString stringWithFormat:@"hook-injected-%lu", (unsigned long)cnt]);
             dispatch_async(dispatch_get_main_queue(), ^{ showBadge(15, @"VTL source added"); });
             return %orig(buf, cnt + 1);
         }
@@ -253,27 +262,37 @@ static void patchExistingList(void) {
         const char *name = _dyld_get_image_name(i);
         if (name && strstr(name, "/spotifyglass.dylib")) { header = _dyld_get_image_header(i); break; }
     }
-    if (!header) return;
+    if (!header) { vtlPing(@"patch-no-glass-image"); return; }
     NSString *uuid = imageUUID(header);
     uintptr_t slotOffset = 0;
     for (size_t k = 0; k < sizeof(kKnownLists) / sizeof(kKnownLists[0]); k++) {
         if ([uuid isEqualToString:@(kKnownLists[k].uuid)]) { slotOffset = kKnownLists[k].slot; break; }
     }
-    if (!slotOffset) return;                                      // a build not checked: the hook alone covers it
+    if (!slotOffset) { vtlPing([@"patch-unknown-uuid-" stringByAppendingString:uuid]); return; }
     void **slot = (void **)((uintptr_t)header + slotOffset);
     void *current = *slot;
-    if (!current || malloc_size(current) == 0) return;            // not a heap object: wrong offset, stand down
+    if (!current) { vtlPing(@"patch-slot-empty"); return; }
+    if (malloc_size(current) == 0) { vtlPing(@"patch-slot-not-heap"); return; }
     id list = (__bridge id)current;
-    if (![list isKindOfClass:NSArray.class]) return;
+    if (![list isKindOfClass:NSArray.class]) { vtlPing(@"patch-not-array"); return; }
     NSUInteger n = [list count];
-    if (n < 2 || n > 24) return;
+    if (n < 2 || n > 24) { vtlPing([NSString stringWithFormat:@"patch-bad-count-%lu", (unsigned long)n]); return; }
     id __unsafe_unretained objs[24];
     [list getObjects:objs range:NSMakeRange(0, n)];
     id __unsafe_unretained buf[25];
-    if (!withVTL(objs, n, buf)) return;
+    if (!withVTL(objs, n, buf)) {
+        NSMutableArray *keys = [NSMutableArray array];
+        for (NSUInteger i = 0; i < n; i++) {
+            [keys addObject:[NSString stringWithFormat:@"%s:%@", class_getName(object_getClass(objs[i])),
+                             [objs[i] respondsToSelector:@selector(key)] ? [objs[i] key] : @"?"]];
+        }
+        vtlPing([@"patch-withVTL-no:" stringByAppendingString:[keys componentsJoinedByString:@","]]);
+        return;
+    }
     NSArray *patched = [NSArray arrayWithObjects:buf count:n + 1];
     *slot = (void *)CFBridgingRetain(patched);                    // the old array is deliberately leaked
     gInjected = YES;
+    vtlPing([NSString stringWithFormat:@"patch-injected-%lu", (unsigned long)n]);
     dispatch_async(dispatch_get_main_queue(), ^{ showBadge(15, @"VTL source added"); });
 }
 
@@ -293,8 +312,10 @@ static void showBadge(int attemptsLeft, NSString *text) {
     UIWindow *win = keyWindow();
     if (!win) {
         if (attemptsLeft > 0) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ showBadge(attemptsLeft - 1, text); });
+        else vtlPing(@"badge-no-key-window");
         return;
     }
+    vtlPing([@"badge-shown:" stringByAppendingString:text]);
     UILabel *badge = [UILabel new];
     badge.text = text;
     badge.textColor = UIColor.blackColor;
@@ -318,9 +339,11 @@ static void showBadge(int attemptsLeft, NSString *text) {
 
 %ctor {
     sg_has = [NSMutableDictionary dictionary];
+    vtlPing(@"ctor");
     [NSURLProtocol registerClass:VTLProxyProtocol.class];
     gProviderClass = objc_getClass("SGLyricsProvider");
     if (!gProviderClass) {
+        vtlPing(@"ctor-no-provider-class");
         dispatch_async(dispatch_get_main_queue(), ^{ showBadge(15, @"VTL: provider class not found"); });
         return;
     }
