@@ -41,6 +41,7 @@ static NSString *const kVTLKey = @"vtl";
 static const struct { const char *uuid; uintptr_t slot; } kKnownLists[] = {
     { "adfbf83aec1a3186948d7ff4318bb6ba", 0x3b3f78 },   // official kit v0.50.0
     { "d4c75c03b90b329d83b960d768cc43aa", 0x532ed0 },   // 0.51.0-beta.1
+    { "e686987ec0543454b8a8462bbe36cae5", 0x773470 },   // chroma 1.0.0-beta.2 (8 providers: + kugou, qqmusic)
 };
 
 typedef void (^VTLDone)(id result);
