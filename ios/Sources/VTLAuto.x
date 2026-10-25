@@ -42,6 +42,7 @@ static const struct { const char *uuid; uintptr_t slot; } kKnownLists[] = {
     { "adfbf83aec1a3186948d7ff4318bb6ba", 0x3b3f78 },   // official kit v0.50.0
     { "d4c75c03b90b329d83b960d768cc43aa", 0x532ed0 },   // 0.51.0-beta.1
     { "e686987ec0543454b8a8462bbe36cae5", 0x773470 },   // chroma 1.0.0-beta.2 (8 providers: + kugou, qqmusic)
+    { "9485dd80a0fe3595adabae406bfa1d18", 0x7f1bf0 },   // chroma 1.0.0-beta.3 (str after arrayWithObjects:count: at 0x3edf60)
 };
 
 typedef void (^VTLDone)(id result);
@@ -62,10 +63,9 @@ static void showBadge(int attemptsLeft, NSString *text);
 
 // Diagnostic: reports each load step to the worker so a failed install can be read off its logs
 // (the URL is all that matters, the answer is ignored).
+// Was a network ping to /vtlauto/ping while debugging the beta.2 port; now only a log line.
 static void vtlPing(NSString *stage) {
-    NSURLComponents *c = [NSURLComponents componentsWithString:@"https://api.vexqyq.com/vtlauto/ping"];
-    c.queryItems = @[[NSURLQueryItem queryItemWithName:@"s" value:stage]];
-    if (c.URL) [[NSURLSession.sharedSession dataTaskWithURL:c.URL] resume];
+    NSLog(@"[VTLAuto] %@", stage);
 }
 
 #pragma mark - the NSURLProtocol that answers BiniLyrics' search for VTL tracks
