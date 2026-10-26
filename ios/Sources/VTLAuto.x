@@ -43,6 +43,7 @@ static const struct { const char *uuid; uintptr_t slot; } kKnownLists[] = {
     { "d4c75c03b90b329d83b960d768cc43aa", 0x532ed0 },   // 0.51.0-beta.1
     { "e686987ec0543454b8a8462bbe36cae5", 0x773470 },   // chroma 1.0.0-beta.2 (8 providers: + kugou, qqmusic)
     { "9485dd80a0fe3595adabae406bfa1d18", 0x7f1bf0 },   // chroma 1.0.0-beta.3 (str after arrayWithObjects:count: at 0x3edf60)
+    { "3bade9db78ff36e29812cf6a64a3da1e", 0x8d25c8 },   // chroma 1.0.0-beta.4 (8 providers, str x0,[x8,#0x5c8] after arrayWithObjects:count: at 0x495ed8)
 };
 
 typedef void (^VTLDone)(id result);
