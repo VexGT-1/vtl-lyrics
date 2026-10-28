@@ -28,6 +28,8 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <malloc/malloc.h>
+#import <SystemConfiguration/SystemConfiguration.h>
+#import <netinet/in.h>
 
 static NSString *const kVTLBase = @"https://api.vexqyq.com/lyrics/";
 static NSString *const kBiniHost = @"lyrics-api.binimum.org";
@@ -340,11 +342,22 @@ static void showBadge(int attemptsLeft, NSString *text) {
 
 #pragma mark - mod lyrics cache
 
-// The mod keeps fetched lyrics in an SGDiskCache named "spotifyglass.lyricscache", misses included,
-// so a track played before VTL had its lyrics keeps showing nothing until that entry expires. Wiping
-// the cache at launch makes every track ask the sources again once per run. Offline the cache is
-// the only lyrics there are, so it is wiped only after a request to the VTL server gets an answer.
-static void wipeModLyricsCacheNow(void) {
+// The mod keeps fetched lyrics in an SGDiskCache named "spotifyglass.lyricscache" and answers a
+// track it has an entry for from there without asking any source, so a track played before VTL had
+// its lyrics never reaches VTL. Wiping the cache at launch, before the mod first reads it, makes
+// every track ask the sources again once per run. Offline the cache is the only lyrics there are, so
+// it is wiped only when the device has a network route (a local check, no request). Returns the
+// removed paths, relative to the app's home folder.
+static NSArray<NSString *> *wipeModLyricsCache(void) {
+    NSMutableArray<NSString *> *removed = [NSMutableArray array];
+    struct sockaddr_in zero = { .sin_len = sizeof(zero), .sin_family = AF_INET };
+    SCNetworkReachabilityRef reach = SCNetworkReachabilityCreateWithAddress(NULL, (const struct sockaddr *)&zero);
+    SCNetworkReachabilityFlags flags = 0;
+    BOOL online = reach && SCNetworkReachabilityGetFlags(reach, &flags)
+        && (flags & kSCNetworkReachabilityFlagsReachable)
+        && !(flags & kSCNetworkReachabilityFlagsConnectionRequired);
+    if (reach) CFRelease(reach);
+    if (!online) return removed;
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *home = NSHomeDirectory();
     for (NSString *sub in @[@"Library", @"Documents", @"tmp"]) {
@@ -354,27 +367,27 @@ static void wipeModLyricsCacheNow(void) {
         while ((rel = [e nextObject])) {
             if (e.level > 4) { [e skipDescendants]; continue; }
             if ([rel.lastPathComponent rangeOfString:@"lyricscache" options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
-            [fm removeItemAtPath:[root stringByAppendingPathComponent:rel] error:nil];
+            if ([fm removeItemAtPath:[root stringByAppendingPathComponent:rel] error:nil]) {
+                [removed addObject:[sub stringByAppendingPathComponent:rel]];
+            }
             [e skipDescendants];
         }
     }
+    return removed;
 }
 
-static void wipeModLyricsCacheIfOnline(void) {
-    NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
-    config.timeoutIntervalForRequest = 5;
-    config.waitsForConnectivity = NO;
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[kVTLBase stringByAppendingString:@"online"]]];
+// Diagnostic: tells the worker what the wipe removed (shows in its logs as a 404 on /lyrics/online).
+static void reportWipe(NSArray<NSString *> *removed) {
+    NSURLComponents *c = [NSURLComponents componentsWithString:[kVTLBase stringByAppendingString:@"online"]];
+    c.queryItems = @[[NSURLQueryItem queryItemWithName:@"wiped" value:removed.count ? [removed componentsJoinedByString:@","] : @"none"]];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:c.URL];
     req.HTTPMethod = @"HEAD";
-    [[[NSURLSession sessionWithConfiguration:config] dataTaskWithRequest:req
-        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            if (!error && [response isKindOfClass:NSHTTPURLResponse.class]) wipeModLyricsCacheNow();
-        }] resume];
+    [[NSURLSession.sharedSession dataTaskWithRequest:req] resume];
 }
 
 %ctor {
     sg_has = [NSMutableDictionary dictionary];
-    wipeModLyricsCacheIfOnline();
+    reportWipe(wipeModLyricsCache());
     vtlPing(@"ctor");
     [NSURLProtocol registerClass:VTLProxyProtocol.class];
     gProviderClass = objc_getClass("SGLyricsProvider");
