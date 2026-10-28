@@ -338,8 +338,30 @@ static void showBadge(int attemptsLeft, NSString *text) {
     });
 }
 
+#pragma mark - mod lyrics cache
+
+// The mod keeps fetched lyrics in an SGDiskCache named "spotifyglass.lyricscache", misses included,
+// so a track played before VTL had its lyrics keeps showing nothing until that entry expires. Wiping
+// the cache at launch makes every track ask the sources again once per run.
+static void wipeModLyricsCache(void) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *home = NSHomeDirectory();
+    for (NSString *sub in @[@"Library", @"Documents", @"tmp"]) {
+        NSString *root = [home stringByAppendingPathComponent:sub];
+        NSDirectoryEnumerator *e = [fm enumeratorAtPath:root];
+        NSString *rel;
+        while ((rel = [e nextObject])) {
+            if (e.level > 4) { [e skipDescendants]; continue; }
+            if ([rel.lastPathComponent rangeOfString:@"lyricscache" options:NSCaseInsensitiveSearch].location == NSNotFound) continue;
+            [fm removeItemAtPath:[root stringByAppendingPathComponent:rel] error:nil];
+            [e skipDescendants];
+        }
+    }
+}
+
 %ctor {
     sg_has = [NSMutableDictionary dictionary];
+    wipeModLyricsCache();
     vtlPing(@"ctor");
     [NSURLProtocol registerClass:VTLProxyProtocol.class];
     gProviderClass = objc_getClass("SGLyricsProvider");
