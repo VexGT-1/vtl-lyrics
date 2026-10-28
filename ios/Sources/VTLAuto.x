@@ -342,8 +342,9 @@ static void showBadge(int attemptsLeft, NSString *text) {
 
 // The mod keeps fetched lyrics in an SGDiskCache named "spotifyglass.lyricscache", misses included,
 // so a track played before VTL had its lyrics keeps showing nothing until that entry expires. Wiping
-// the cache at launch makes every track ask the sources again once per run.
-static void wipeModLyricsCache(void) {
+// the cache at launch makes every track ask the sources again once per run. Offline the cache is
+// the only lyrics there are, so it is wiped only after a request to the VTL server gets an answer.
+static void wipeModLyricsCacheNow(void) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSString *home = NSHomeDirectory();
     for (NSString *sub in @[@"Library", @"Documents", @"tmp"]) {
@@ -359,9 +360,21 @@ static void wipeModLyricsCache(void) {
     }
 }
 
+static void wipeModLyricsCacheIfOnline(void) {
+    NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.timeoutIntervalForRequest = 5;
+    config.waitsForConnectivity = NO;
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[kVTLBase stringByAppendingString:@"online"]]];
+    req.HTTPMethod = @"HEAD";
+    [[[NSURLSession sessionWithConfiguration:config] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (!error && [response isKindOfClass:NSHTTPURLResponse.class]) wipeModLyricsCacheNow();
+        }] resume];
+}
+
 %ctor {
     sg_has = [NSMutableDictionary dictionary];
-    wipeModLyricsCache();
+    wipeModLyricsCacheIfOnline();
     vtlPing(@"ctor");
     [NSURLProtocol registerClass:VTLProxyProtocol.class];
     gProviderClass = objc_getClass("SGLyricsProvider");
