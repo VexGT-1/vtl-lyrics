@@ -28,6 +28,7 @@
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <malloc/malloc.h>
+#import <mach-o/getsect.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <netinet/in.h>
 
@@ -46,7 +47,9 @@ static const struct { const char *uuid; uintptr_t slot; } kKnownLists[] = {
     { "e686987ec0543454b8a8462bbe36cae5", 0x773470 },   // chroma 1.0.0-beta.2 (8 providers: + kugou, qqmusic)
     { "9485dd80a0fe3595adabae406bfa1d18", 0x7f1bf0 },   // chroma 1.0.0-beta.3 (str after arrayWithObjects:count: at 0x3edf60)
     { "3bade9db78ff36e29812cf6a64a3da1e", 0x8d25c8 },   // chroma 1.0.0-beta.4 (8 providers, str x0,[x8,#0x5c8] after arrayWithObjects:count: at 0x495ed8)
+    { "17783f590de6300da0b51f6be9f5cf6d", 0x99ce38 },   // chroma 1.0.0-beta.6 (str after arrayWithObjects:count: at 0x5121b4; scratch/findlist.py)
 };
+// A build missing from this table is handled by scanForListSlot() below, which finds the slot at runtime.
 
 typedef void (^VTLDone)(id result);
 typedef void (^VTLAsk)(id query, VTLDone done);
@@ -258,6 +261,42 @@ static NSString *imageUUID(const struct mach_header *header) {
     return @"";
 }
 
+// For a Chroma build not in kKnownLists: look through spotifyglass.dylib's own writable data for a
+// pointer to an NSArray made only of SGLyricsProvider objects - that is the provider list slot.
+// Nothing is messaged until a word is known to point at a heap block whose class is one of the
+// NSArray classes, so stray values are only ever compared, never dereferenced as objects.
+static uintptr_t scanForListSlot(const struct mach_header *header) {
+    static const char *const kSects[][2] = {
+        { "__DATA", "__bss" }, { "__DATA", "__common" }, { "__DATA", "__data" },
+        { "__DATA_DIRTY", "__bss" }, { "__DATA_DIRTY", "__common" }, { "__DATA_DIRTY", "__data" },
+    };
+    const char *arrayNames[] = { "__NSArrayI", "__NSArrayM", "__NSArrayI_Transfer", "__NSFrozenArrayM", "__NSArray0" };
+    Class arrayClasses[5];
+    for (int i = 0; i < 5; i++) arrayClasses[i] = objc_getClass(arrayNames[i]);
+    for (size_t s = 0; s < sizeof(kSects) / sizeof(kSects[0]); s++) {
+        unsigned long size = 0;
+        uint8_t *data = getsectiondata((const struct mach_header_64 *)header, kSects[s][0], kSects[s][1], &size);
+        if (!data || size < 8) continue;
+        for (unsigned long off = 0; off + 8 <= size; off += 8) {
+            void *w = *(void **)(data + off);
+            if (!w || ((uintptr_t)w >> 63) || malloc_size(w) < 16) continue;
+            Class c = object_getClass((__bridge id)w);
+            BOOL isArray = NO;
+            for (int i = 0; i < 5; i++) if (c && c == arrayClasses[i]) { isArray = YES; break; }
+            if (!isArray) continue;
+            NSArray *list = (__bridge NSArray *)w;
+            NSUInteger n = list.count;
+            if (n < 2 || n > 24) continue;
+            BOOL allProviders = YES;
+            for (NSUInteger i = 0; i < n; i++) {
+                if (object_getClass(list[i]) != gProviderClass) { allProviders = NO; break; }
+            }
+            if (allProviders) return (uintptr_t)(data + off) - (uintptr_t)header;
+        }
+    }
+    return 0;
+}
+
 static void patchExistingList(void) {
     if (gInjected || !gProviderClass) return;
     const struct mach_header *header = NULL;
@@ -271,7 +310,11 @@ static void patchExistingList(void) {
     for (size_t k = 0; k < sizeof(kKnownLists) / sizeof(kKnownLists[0]); k++) {
         if ([uuid isEqualToString:@(kKnownLists[k].uuid)]) { slotOffset = kKnownLists[k].slot; break; }
     }
-    if (!slotOffset) { vtlPing([@"patch-unknown-uuid-" stringByAppendingString:uuid]); return; }
+    if (!slotOffset) {
+        slotOffset = scanForListSlot(header);
+        if (!slotOffset) { vtlPing([@"patch-unknown-uuid-" stringByAppendingString:uuid]); return; }
+        vtlPing([NSString stringWithFormat:@"patch-scan-found-%@-0x%lx", uuid, (unsigned long)slotOffset]);
+    }
     void **slot = (void **)((uintptr_t)header + slotOffset);
     void *current = *slot;
     if (!current) { vtlPing(@"patch-slot-empty"); return; }
