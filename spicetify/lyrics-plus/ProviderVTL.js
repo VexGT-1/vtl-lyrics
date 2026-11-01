@@ -12,7 +12,9 @@ const ProviderVTL = (() => {
 
 	async function findLyrics(info) {
 		const id = info.uri.split(":")[2];
-		const res = await fetch(API + id);
+		const res = await fetch(API + id, {
+			headers: { Authorization: "Bearer " + (localStorage.getItem("vtl-lyrics-key") || "") },
+		});
 		if (res.status !== 200) return { error: "No VTL lyrics", uri: info.uri };
 		const doc = new DOMParser().parseFromString(await res.text(), "text/xml");
 		const lines = Array.from(doc.getElementsByTagName("p")).map((p) => ({

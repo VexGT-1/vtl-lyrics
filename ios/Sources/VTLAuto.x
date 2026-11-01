@@ -31,11 +31,14 @@
 #import <mach-o/getsect.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <netinet/in.h>
+#import <Security/Security.h>
 
 static NSString *const kVTLBase = @"https://api.vexqyq.com/lyrics/";
 static NSString *const kBiniHost = @"lyrics-api.binimum.org";
 static NSString *const kMarker = @"vtl:";
 static NSString *const kVTLKey = @"vtl";
+static NSString *const kTTMLPath = @"/vtl-ttml/";     // served by VTLProxyProtocol, so the key never sits in a URL
+static NSString *const kAPIKeyPrefix = @"vtlk_";
 
 // Where each known spotifyglass.dylib build keeps its provider array, relative to the image, keyed by
 // the image's LC_UUID so a build this was not checked against is never written to (that fallback just
@@ -74,6 +77,52 @@ static void vtlPing(NSString *stage) {
     NSLog(@"[VTLAuto] %@", stage);
 }
 
+#pragma mark - the account API key
+
+// VTL's lyrics answer only the owner's account API key. It is kept in the Keychain and goes out only
+// as a header to api.vexqyq.com, through a session the mod's own requests do not share.
+static NSMutableDictionary<NSString *, NSData *> *sg_ttml;    // track id -> TTML, @synchronized on itself
+
+static NSDictionary *keyQuery(void) {
+    return @{ (__bridge id)kSecClass: (__bridge id)kSecClassGenericPassword,
+              (__bridge id)kSecAttrService: @"vtl.lyrics",
+              (__bridge id)kSecAttrAccount: @"apikey" };
+}
+
+static NSString *apiKey(void) {
+    NSMutableDictionary *q = [keyQuery() mutableCopy];
+    q[(__bridge id)kSecReturnData] = @YES;
+    q[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+    CFTypeRef out = NULL;
+    if (SecItemCopyMatching((__bridge CFDictionaryRef)q, &out) != errSecSuccess || !out) return nil;
+    NSData *data = CFBridgingRelease(out);
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+}
+
+static OSStatus saveAPIKey(NSString *key) {
+    SecItemDelete((__bridge CFDictionaryRef)keyQuery());
+    if (!key.length) return errSecSuccess;
+    NSMutableDictionary *q = [keyQuery() mutableCopy];
+    q[(__bridge id)kSecValueData] = [key dataUsingEncoding:NSUTF8StringEncoding];
+    q[(__bridge id)kSecAttrAccessible] = (__bridge id)kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly;
+    return SecItemAdd((__bridge CFDictionaryRef)q, NULL);
+}
+
+static NSURLSession *apiSession(void) {
+    static NSURLSession *session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        session = [NSURLSession sessionWithConfiguration:NSURLSessionConfiguration.ephemeralSessionConfiguration];
+    });
+    return session;
+}
+
+static NSURLRequest *lyricsRequest(NSString *trackID, NSString *key) {
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:[kVTLBase stringByAppendingString:trackID]]];
+    [req setValue:[@"Bearer " stringByAppendingString:key] forHTTPHeaderField:@"Authorization"];
+    return req;
+}
+
 #pragma mark - the NSURLProtocol that answers BiniLyrics' search for VTL tracks
 
 static NSString *queryParam(NSURL *url, NSString *name) {
@@ -91,15 +140,26 @@ static NSString *queryParam(NSURL *url, NSString *name) {
 + (BOOL)canInitWithRequest:(NSURLRequest *)request {
     NSURL *url = request.URL;
     if (![url.host isEqualToString:kBiniHost]) return NO;
-    return [queryParam(url, @"track") hasPrefix:kMarker];
+    return [url.path hasPrefix:kTTMLPath] || [queryParam(url, @"track") hasPrefix:kMarker];
 }
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
 - (void)startLoading {
     NSURL *url = self.request.URL;
+    if ([url.path hasPrefix:kTTMLPath]) {
+        // The TTML checkVTL already fetched with the key; the mod's reader asks for it with no header.
+        NSData *ttml;
+        @synchronized (sg_ttml) { ttml = sg_ttml[url.lastPathComponent]; }
+        NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:url statusCode:ttml ? 200 : 404 HTTPVersion:@"HTTP/1.1"
+            headerFields:@{@"Content-Type": @"application/ttml+xml; charset=utf-8"}];
+        [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+        if (ttml) [self.client URLProtocol:self didLoadData:ttml];
+        [self.client URLProtocolDidFinishLoading:self];
+        return;
+    }
     NSString *trackID = [queryParam(url, @"track") substringFromIndex:kMarker.length];
     NSInteger duration = [queryParam(url, @"duration") integerValue];
     NSDictionary *body = @{@"results": @[@{
-        @"lyricsUrl": [kVTLBase stringByAppendingString:trackID],
+        @"lyricsUrl": [NSString stringWithFormat:@"https://%@%@%@", kBiniHost, kTTMLPath, trackID],
         @"duration": @(duration),
         @"timing_type": @"word",
     }]};
@@ -121,10 +181,12 @@ static void checkVTL(NSString *trackID, void (^answer)(BOOL has)) {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSNumber *known = sg_has[trackID];
         if (known) { answer(known.boolValue); return; }
-        NSURL *url = [NSURL URLWithString:[kVTLBase stringByAppendingString:trackID]];
-        [[NSURLSession.sharedSession dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSString *key = apiKey();
+        if (!key.length) { answer(NO); return; }
+        [[apiSession() dataTaskWithRequest:lyricsRequest(trackID, key) completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
             NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
             BOOL has = !error && status == 200 && data.length > 0;
+            if (has) { @synchronized (sg_ttml) { sg_ttml[trackID] = data; } }
             dispatch_async(dispatch_get_main_queue(), ^{
                 // A miss is kept too (one request per track per run); a failed request is not.
                 if (has || status == 404) sg_has[trackID] = @(has);
@@ -342,6 +404,205 @@ static void patchExistingList(void) {
     dispatch_async(dispatch_get_main_queue(), ^{ showBadge(15, @"VTL source added"); });
 }
 
+#pragma mark - the VTL key row on the Lyrics sources page
+
+@interface SGOrderController : UIViewController
+@property (nonatomic, copy) NSArray *items;
+@end
+
+// A plain subview of the page's table, just past its content, so nothing here depends on how a given
+// Chroma build lays the page out: the class is found by name and the table by walking the view tree.
+@interface VTLKeyRow : UIView
+@property (nonatomic, weak) UIViewController *page;
+- (void)reposition;
+@end
+
+@implementation VTLKeyRow {
+    UILabel *_header, *_title, *_value, *_help;
+    UIButton *_card;
+    CGFloat _baseInset, _lastInset;
+}
+
+static UIFont *roundedFont(CGFloat size, UIFontWeight weight) {
+    UIFont *font = [UIFont systemFontOfSize:size weight:weight];
+    UIFontDescriptor *d = [font.fontDescriptor fontDescriptorWithDesign:UIFontDescriptorSystemDesignRounded];
+    return d ? [UIFont fontWithDescriptor:d size:size] : font;
+}
+
+- (instancetype)init {
+    self = [super initWithFrame:CGRectZero];
+    if (!self) return nil;
+    _lastInset = -1;
+    UIColor *gray = [UIColor colorWithWhite:0.65 alpha:1];
+    _header = [UILabel new];
+    _header.text = @"VTL LYRICS";
+    _header.font = roundedFont(13, UIFontWeightBold);
+    _header.textColor = gray;
+    _card = [UIButton buttonWithType:UIButtonTypeCustom];
+    _card.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1];
+    _card.layer.cornerRadius = 18;
+    __weak VTLKeyRow *weakSelf = self;
+    [_card addAction:[UIAction actionWithHandler:^(UIAction *a) { [weakSelf promptForKey]; }] forControlEvents:UIControlEventTouchUpInside];
+    _title = [UILabel new];
+    _title.text = @"VTL key";
+    _title.font = roundedFont(17, UIFontWeightBold);
+    _title.textColor = UIColor.whiteColor;
+    _value = [UILabel new];
+    _value.font = roundedFont(15, UIFontWeightBold);
+    _value.textColor = gray;
+    _value.textAlignment = NSTextAlignmentRight;
+    _help = [UILabel new];
+    _help.text = @"VTL lyrics are private. Paste your account API key from the VTL dashboard.";
+    _help.font = roundedFont(13, UIFontWeightSemibold);
+    _help.textColor = gray;
+    _help.numberOfLines = 0;
+    [_card addSubview:_title];
+    [_card addSubview:_value];
+    _title.userInteractionEnabled = NO;
+    _value.userInteractionEnabled = NO;
+    for (UIView *v in @[_header, _card, _help]) [self addSubview:v];
+    [self refreshValue];
+    return self;
+}
+
+- (void)refreshValue {
+    NSString *key = apiKey();
+    _value.text = key.length > 8 ? [NSString stringWithFormat:@"%@...%@", kAPIKeyPrefix, [key substringFromIndex:key.length - 4]] : @"Not set";
+}
+
+- (CGFloat)helpHeight:(CGFloat)width {
+    return ceil([_help sizeThatFits:CGSizeMake(MAX(width - 62, 1), CGFLOAT_MAX)].height);
+}
+
+// Follows the table's content down the page, and adds its own height to the table's bottom inset on
+// top of whatever the page set there itself.
+- (void)reposition {
+    UIScrollView *table = (UIScrollView *)self.superview;
+    if (!table) return;
+    CGFloat width = table.bounds.size.width;
+    CGFloat height = 86 + [self helpHeight:width] + 12;
+    self.frame = CGRectMake(0, table.contentSize.height + 12, width, height);
+    UIEdgeInsets inset = table.contentInset;
+    if (fabs(inset.bottom - _lastInset) > 0.5) _baseInset = inset.bottom;
+    _lastInset = _baseInset + height + 12;
+    if (fabs(inset.bottom - _lastInset) > 0.5) {
+        inset.bottom = _lastInset;
+        table.contentInset = inset;
+    }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat w = self.bounds.size.width;
+    _header.frame = CGRectMake(31, 0, w - 62, 20);
+    _card.frame = CGRectMake(16, 26, w - 32, 52);
+    _title.frame = CGRectMake(16, 0, 110, 52);
+    _value.frame = CGRectMake(126, 0, w - 32 - 126 - 16, 52);
+    _help.frame = CGRectMake(31, 86, w - 62, [self helpHeight:w]);
+}
+
+- (void)willMoveToSuperview:(UIView *)next {
+    [self.superview removeObserver:self forKeyPath:@"contentSize"];
+    [next addObserver:self forKeyPath:@"contentSize" options:0 context:NULL];
+}
+
+- (void)observeValueForKeyPath:(NSString *)path ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
+    [self reposition];
+}
+
+- (void)say:(NSString *)message {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"VTL key" message:message preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [self.page presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)keyChanged {
+    [sg_has removeAllObjects];
+    @synchronized (sg_ttml) { [sg_ttml removeAllObjects]; }
+    [self refreshValue];
+}
+
+- (void)store:(NSString *)key {
+    OSStatus status = saveAPIKey(key);
+    [self keyChanged];
+    if (status != errSecSuccess) [self say:[NSString stringWithFormat:@"Could not save the key (error %d).", (int)status]];
+    else [self say:@"Key saved. Restart Spotify to load your VTL lyrics."];
+}
+
+// A made-up track id: 404 means the key got past the login check, 401 or 403 means it did not.
+- (void)checkAndStore:(NSString *)key {
+    if (![key hasPrefix:kAPIKeyPrefix]) { [self say:@"That is not an API key. It starts with vtlk_."]; return; }
+    [[apiSession() dataTaskWithRequest:lyricsRequest(@"vtlkeycheck0", key) completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (status == 404) [self store:key];
+            else if (status == 401 || status == 403) [self say:@"VTL refused that key. Only the owner's API key works."];
+            else [self say:@"Could not reach VTL. Try again."];
+        });
+    }] resume];
+}
+
+- (void)promptForKey {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"VTL key" message:@"Paste your account API key." preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.placeholder = @"vtlk_...";
+        field.secureTextEntry = YES;
+        field.autocorrectionType = UITextAutocorrectionTypeNo;
+        field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    if (apiKey().length) {
+        [alert addAction:[UIAlertAction actionWithTitle:@"Remove" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *a) {
+            saveAPIKey(nil);
+            [self keyChanged];
+        }]];
+    }
+    __weak UIAlertController *weakAlert = alert;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+        NSString *key = [weakAlert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        [self checkAndStore:key];
+    }]];
+    [self.page presentViewController:alert animated:YES completion:nil];
+}
+@end
+
+static UITableView *findTable(UIView *view) {
+    if ([view isKindOfClass:UITableView.class]) return (UITableView *)view;
+    for (UIView *sub in view.subviews) {
+        UITableView *found = findTable(sub);
+        if (found) return found;
+    }
+    return nil;
+}
+
+static const void *kKeyRowTag = &kKeyRowTag;
+
+static void installKeyRow(SGOrderController *page) {
+    VTLKeyRow *row = objc_getAssociatedObject(page, kKeyRowTag);
+    if (!row) {
+        // This page class also lists other things (clip sources); only the list holding VTL gets the row.
+        BOOL lyricsPage = NO;
+        for (id item in page.items) {
+            @try { if ([[item valueForKey:@"key"] isEqual:kVTLKey]) { lyricsPage = YES; break; } } @catch (NSException *e) {}
+        }
+        if (!lyricsPage) return;
+        UITableView *table = findTable(page.view);
+        if (!table) return;
+        row = [VTLKeyRow new];
+        row.page = page;
+        [table addSubview:row];
+        objc_setAssociatedObject(page, kKeyRowTag, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [row reposition];
+}
+
+%hook SGOrderController
+- (void)viewDidLayoutSubviews {
+    %orig;
+    installKeyRow(self);
+}
+%end
+
 #pragma mark - load badge (diagnostic)
 
 static UIWindow *keyWindow(void) {
@@ -430,6 +691,7 @@ static void reportWipe(NSArray<NSString *> *removed) {
 
 %ctor {
     sg_has = [NSMutableDictionary dictionary];
+    sg_ttml = [NSMutableDictionary dictionary];
     reportWipe(wipeModLyricsCache());
     vtlPing(@"ctor");
     [NSURLProtocol registerClass:VTLProxyProtocol.class];

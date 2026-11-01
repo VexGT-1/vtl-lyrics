@@ -159,7 +159,9 @@
     lines = [];
     hasVtlLyrics = false;
     try {
-      const res = await fetch(`${API}/lyrics/${trackId}`);
+      const res = await fetch(`${API}/lyrics/${trackId}`, {
+        headers: { Authorization: "Bearer " + (localStorage.getItem("vtl-lyrics-key") || "") },
+      });
       if (!res.ok) return;
       const xml = await res.text();
       lines = parseTTML(xml);

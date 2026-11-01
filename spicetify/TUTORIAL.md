@@ -38,7 +38,7 @@ spicetify backup apply
 2. Open the Lyrics tab. You get VTL's lyrics, word by word, with a small "VTL LYRICS" label at the top.
 3. A track VTL has nothing for just shows Spotify's normal lyrics.
 
-Which tracks have lyrics: https://lyrics.vexqyq.com
+VTL lyrics need the owner's account API key. In Spicetify devtools run `localStorage.setItem("vtl-lyrics-key", "vtlk_...")`.
 
 ## If it does not show up
 

@@ -12,7 +12,7 @@ Not made by or affiliated with Spotify or chroma.pw.
 
 ## Where the lyrics come from
 
-`https://api.vexqyq.com/lyrics/<spotifyTrackId>` returns a word-timed TTML file for tracks VTL has. Browse and download them at https://lyrics.vexqyq.com. A track VTL has nothing for answers nothing, so the next source in your list takes over.
+`https://api.vexqyq.com/lyrics/<spotifyTrackId>` returns a word-timed TTML file for tracks VTL has, to the owner's account API key only (`Authorization: Bearer vtlk_...`). On iOS, paste the key into **VTL key** on the Lyrics sources page. In Spicetify, run `localStorage.setItem("vtl-lyrics-key", "vtlk_...")` in devtools. A track VTL has nothing for answers nothing, so the next source in your list takes over.
 
 ## iOS
 
