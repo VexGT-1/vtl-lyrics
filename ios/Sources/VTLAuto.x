@@ -410,17 +410,18 @@ static void patchExistingList(void) {
 @property (nonatomic, copy) NSArray *items;
 @end
 
-// A plain subview of the page's table, just past its content, so nothing here depends on how a given
-// Chroma build lays the page out: the class is found by name and the table by walking the view tree.
+// The table's footer view, so nothing here depends on how a given Chroma build lays the page out: the class
+// is found by name and the table by walking the view tree. It never watches or changes the table's insets:
+// the page sets those during layout too, and fighting over them froze the app in a layout loop.
 @interface VTLKeyRow : UIView
 @property (nonatomic, weak) UIViewController *page;
-- (void)reposition;
+@property (nonatomic, strong) UIView *above;   // a footer the page already had, kept on top of the row
+- (void)fitToWidth:(CGFloat)width;
 @end
 
 @implementation VTLKeyRow {
     UILabel *_header, *_title, *_value, *_help;
     UIButton *_card;
-    CGFloat _baseInset, _lastInset;
 }
 
 static UIFont *roundedFont(CGFloat size, UIFontWeight weight) {
@@ -432,7 +433,6 @@ static UIFont *roundedFont(CGFloat size, UIFontWeight weight) {
 - (instancetype)init {
     self = [super initWithFrame:CGRectZero];
     if (!self) return nil;
-    _lastInset = -1;
     UIColor *gray = [UIColor colorWithWhite:0.65 alpha:1];
     _header = [UILabel new];
     _header.text = @"VTL LYRICS";
@@ -474,40 +474,23 @@ static UIFont *roundedFont(CGFloat size, UIFontWeight weight) {
     return ceil([_help sizeThatFits:CGSizeMake(MAX(width - 62, 1), CGFLOAT_MAX)].height);
 }
 
-// Follows the table's content down the page, and adds its own height to the table's bottom inset on
-// top of whatever the page set there itself.
-- (void)reposition {
-    UIScrollView *table = (UIScrollView *)self.superview;
-    if (!table) return;
-    CGFloat width = table.bounds.size.width;
-    CGFloat height = 86 + [self helpHeight:width] + 12;
-    self.frame = CGRectMake(0, table.contentSize.height + 12, width, height);
-    UIEdgeInsets inset = table.contentInset;
-    if (fabs(inset.bottom - _lastInset) > 0.5) _baseInset = inset.bottom;
-    _lastInset = _baseInset + height + 12;
-    if (fabs(inset.bottom - _lastInset) > 0.5) {
-        inset.bottom = _lastInset;
-        table.contentInset = inset;
-    }
+- (CGFloat)aboveHeight {
+    return _above ? _above.bounds.size.height : 0;
+}
+
+- (void)fitToWidth:(CGFloat)width {
+    self.frame = CGRectMake(0, 0, width, [self aboveHeight] + 12 + 86 + [self helpHeight:width] + 24);
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat w = self.bounds.size.width;
-    _header.frame = CGRectMake(31, 0, w - 62, 20);
-    _card.frame = CGRectMake(16, 26, w - 32, 52);
+    CGFloat w = self.bounds.size.width, top = [self aboveHeight] + 12;
+    _above.frame = CGRectMake(0, 0, w, [self aboveHeight]);
+    _header.frame = CGRectMake(31, top, w - 62, 20);
+    _card.frame = CGRectMake(16, top + 26, w - 32, 52);
     _title.frame = CGRectMake(16, 0, 110, 52);
     _value.frame = CGRectMake(126, 0, w - 32 - 126 - 16, 52);
-    _help.frame = CGRectMake(31, 86, w - 62, [self helpHeight:w]);
-}
-
-- (void)willMoveToSuperview:(UIView *)next {
-    [self.superview removeObserver:self forKeyPath:@"contentSize"];
-    [next addObserver:self forKeyPath:@"contentSize" options:0 context:NULL];
-}
-
-- (void)observeValueForKeyPath:(NSString *)path ofObject:(id)object change:(NSDictionary *)change context:(void *)context {
-    [self reposition];
+    _help.frame = CGRectMake(31, top + 86, w - 62, [self helpHeight:w]);
 }
 
 - (void)say:(NSString *)message {
@@ -587,13 +570,26 @@ static void installKeyRow(SGOrderController *page) {
         }
         if (!lyricsPage) return;
         UITableView *table = findTable(page.view);
-        if (!table) return;
+        if (!table || table.bounds.size.width < 1) return;
         row = [VTLKeyRow new];
         row.page = page;
-        [table addSubview:row];
+        UIView *old = table.tableFooterView;
+        if (old && old.bounds.size.height > 1) {
+            row.above = old;
+            [row addSubview:old];
+        }
+        [row fitToWidth:table.bounds.size.width];
         objc_setAssociatedObject(page, kKeyRowTag, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        table.tableFooterView = row;
+        return;
     }
-    [row reposition];
+    // After the first time, only a real width change (rotation) touches anything.
+    UITableView *table = (UITableView *)row.superview;
+    CGFloat width = [table isKindOfClass:UITableView.class] ? table.bounds.size.width : 0;
+    if (width >= 1 && fabs(row.bounds.size.width - width) > 0.5) {
+        [row fitToWidth:width];
+        table.tableFooterView = row;
+    }
 }
 
 %hook SGOrderController
